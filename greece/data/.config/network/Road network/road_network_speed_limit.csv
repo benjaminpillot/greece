@@ -1,0 +1,5 @@
+Attribute name,Attribute value,Speed regulatory limit (km/h)
+ETAT,Revêtu,90
+ETAT,Non revêtu,70
+ETAT,Sentier,50
+ETAT,Chemin d'exploitation,40

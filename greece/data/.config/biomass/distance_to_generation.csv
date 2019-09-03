@@ -1,0 +1,4 @@
+Name,Path,Attribute name,Attribute value
+Roads,Road network/roads.shp,,
+Electrical lines,reseau_electrique/main_grid.shp,,
+Water,water/SURFACE_EAU.SHP,,
