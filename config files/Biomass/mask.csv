@@ -1,0 +1,25 @@
+Name,Path,Attribute name,Attribute value,Buffer distance
+PPGM,Series forestieres/onf_2017_series_forestieres.shp,classement,PPGM,500
+SIE,Series forestieres/onf_2017_series_forestieres.shp,classement,IE,500
+Registered sites,Sites inscrits/sites_inscrits_2009.shp,,,500
+ZNIEFF1,znieff1/znieff1_2014_csrpn_copy1.shp,,,500
+ZNIEFF2,znieff2/znieff2_terre_2014_s_973.shp,,,500
+Protected areas,Protected areas/WDPA_Apr2018_GUF-shapefile-polygons.shp,,,500
+PFE,Domaine forestier permanent/dfp_onf.shp,,,200
+Urban,landuse/occ_sol_2015.shp,nature1_15,artificial,200
+Forest,landuse/occ_sol_2015.shp,nature2_15,forest,200
+Damaged forest,landuse/occ_sol_2015.shp,nature2_15,damaged ecosystems,200
+Flood savanna,landuse/occ_sol_2015.shp,nature3_15,flood savanna,100
+Water,water/SURFACE_EAU.SHP,,,100
+Shoreline,Sealine/limite_cotiere.shp,NATURE,Limite côtière,100
+Electrical grid,reseau_electrique/main_grid.shp,,,100
+Roads,Road network/roads.shp,,,30
+Wetland,landuse/occ_sol_2015.shp,nature1_15,wetland,0
+Dune/sand,landuse/occ_sol_2015.shp,nature3_15,beach/sand,0
+Rice-farming,landuse/occ_sol_2015.shp,nature3_15,rice-farming,0
+Orchard,landuse/occ_sol_2015.shp,nature3_15,orchard,0
+Agriculture,landuse/occ_sol_2015.shp,nature3_15,agriculture with vegetation,0
+Cultivated land,landuse/occ_sol_2015.shp,nature3_15,complex culture systems,0
+#Arable land,landuse/occ_sol_2015.shp,nature3_15,arable land,0
+#Rocky savanna,landuse/occ_sol_2015.shp,nature3_15,rocky savanna,0
+#Dry savanna,landuse/occ_sol_2015.shp,nature3_15,dry savanna,0

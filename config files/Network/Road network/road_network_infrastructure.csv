@@ -1,0 +1,5 @@
+Attribute name,Attribute value (road type),Rolling coefficient
+ETAT,Revêtu,0.01
+ETAT,Non revêtu,0.015
+ETAT,Sentier,0.02
+ETAT,Chemin d'exploitation,0.02

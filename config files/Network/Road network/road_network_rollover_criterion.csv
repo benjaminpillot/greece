@@ -1,0 +1,5 @@
+Attribute name,Attribute value (road type),Rollover criterion
+ETAT,Revêtu,0.2
+ETAT,Non revêtu,0.18
+ETAT,Sentier,0.15
+ETAT,Chemin d'exploitation,0.15

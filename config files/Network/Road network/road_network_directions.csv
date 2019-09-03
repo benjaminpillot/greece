@@ -1,0 +1,4 @@
+Attribute name,Attribute value,Direction
+SENS,Double sens,two-ways
+SENS,Sens unique,one-way
+SENS,Sens inverse,reverse

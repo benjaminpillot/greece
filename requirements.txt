@@ -1,0 +1,14 @@
+python-dateutil>=2.8.0
+elevation>=1.0.5
+gis-tools>=0.15.7
+greece-utils>=0.1.0
+matplotlib>=2.2.3
+networkx>=2.1
+numpy>=1.14.3
+pandapower==1.6.1
+pandas>=0.23.4
+pvlib>=0.6.0
+pytz>=2018.7
+scipy>=1.1.0
+shapely>=1.6.4
+tables>=3.4.4

@@ -1,0 +1,4 @@
+Name,Path,Attribute name,Attribute value,Distance threshold
+Electrical lines,reseau_electrique/main_grid.shp,,,20000
+Roads,Road network/roads.shp,,,20000
+Water,water/SURFACE_EAU.SHP,,,10000
