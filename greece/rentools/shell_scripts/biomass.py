@@ -17,12 +17,7 @@ __copyright__ = 'Copyright 2018, Benjamin Pillot'
 __email__ = 'benjaminpillot@riseup.net'
 
 
-def main():
-    description = 'Compute biomass resource/generation polygons and save it to geo/table file(s) using given config ' \
-                  'files located in directory specified by the user'
+description = 'Compute biomass resource/generation polygons and save it to geo/table file(s) using given config ' \
+              'files located in directory specified by the user'
 
-    run_model(BiomassConfiguration, BiomassModel, description, "biomass", "main.config", "biomass.config")
-
-
-if __name__ == "__main__":
-    main()
+run_model(BiomassConfiguration, BiomassModel, description, "biomass", "main.config", "biomass.config")
