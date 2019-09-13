@@ -203,6 +203,7 @@ class MainConfigurationParser(ConfigurationParser):
     PATH_TO_DEM_FILE = None
     PATH_TO_LAND_USE_FILE = None
     LAND_USE_ATTRIBUTE = None
+    CPU_COUNT = 1
 
     def __init__(self, config_file):
         super().__init__(config_file)
@@ -210,13 +211,17 @@ class MainConfigurationParser(ConfigurationParser):
         self._read_main_config_attributes.update(CRS=self._set_crs, SURFACE_CRS=self._set_crs,
                                                  PATH_TO_DEM_FILE=self._set_path_to_file,
                                                  PATH_TO_LAND_USE_FILE=self._set_path_to_file,
-                                                 LAND_USE_ATTRIBUTE=self._set_configuration_attribute)
+                                                 LAND_USE_ATTRIBUTE=self._set_configuration_attribute,
+                                                 CPU_COUNT=self._set_cpu_count)
 
     def is_valid_config_file(self):
         return True
 
     ###################
     # Protected methods
+    def _set_cpu_count(self, attr, cpu_count):
+        self._set_positive_integer(attr, cpu_count)
+
     def _set_crs(self, attr, crs):
         try:
             self._set_configuration_attribute(attr, proj4_from({'init': crs}))
@@ -782,7 +787,9 @@ class MixedGenerationConfigurationParser(ConfigurationParser):
 
 
 if __name__ == "__main__":
-    test = MixedGenerationConfigurationParser("/home/benjamin/ownCloud/Post-doc Guyane/greece/config files/Mixed "
-                                              "generation/mixed_generation.config")
+    test = MainConfigurationParser("/home/benjamin/ownCloud/Post-doc Guyane/GREECE model/Config files/Main "
+                                   "configuration/main.config")
+    # test = MixedGenerationConfigurationParser("/home/benjamin/ownCloud/Post-doc Guyane/greece/config files/Mixed "
+    #                                           "generation/mixed_generation.config")
     test.parse()
-    print(test)
+    print(test.CPU_COUNT)
