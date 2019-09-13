@@ -4,7 +4,7 @@
 
 More detailed description.
 """
-from pvlib.solarposition import get_sun_rise_set_transit
+from pvlib.solarposition import sun_rise_set_transit_spa, get_solarposition
 from pandas import DatetimeIndex
 
 # __all__ = ["Surface", "SunPosition", "_sun_position"]
@@ -14,11 +14,26 @@ __copyright__ = 'Copyright 2017, Benjamin Pillot'
 __email__ = 'benjaminpillot@riseup.net'
 
 
-def get_sunrise_and_sunset(time, location):
+def get_solar_position(time, latitude, longitude, altitude, pvlib_method="nrel_numba", **kwargs):
+    """ Get solar position
+
+    Use pvlib library and use of numba by default
+    :param time:
+    :param latitude:
+    :param longitude:
+    :param altitude:
+    :param pvlib_method:
+    :return:
+    """
+    return get_solarposition(time, latitude, longitude, altitude, method=pvlib_method, **kwargs)
+
+
+def get_sunrise_and_sunset(time, location, pvlib_method='numba'):
     """ Get sunrise and sunset times
 
     :param time:
     :param location:
+    :param pvlib_method: numpy or numba
     :return:
     """
     # try:
@@ -27,7 +42,8 @@ def get_sunrise_and_sunset(time, location):
     #     time_utc = time.floor("D").tz_localize('UTC')
 
     # sun_rise_set = get_sun_rise_set_transit(time_utc, location.latitude, location.longitude)
-    sun_rise_set = get_sun_rise_set_transit(time, location.latitude, location.longitude)
+    # sun_rise_set = get_sun_rise_set_transit(time, location.latitude, location.longitude)
+    sun_rise_set = sun_rise_set_transit_spa(time, location.latitude, location.longitude, how=pvlib_method)
 
     # if time.tz is None:
     #     to_tz = location.tz
