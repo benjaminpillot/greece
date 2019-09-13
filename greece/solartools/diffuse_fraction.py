@@ -6,10 +6,10 @@ More detailed description.
 """
 import numpy as np
 from pandas import DataFrame, date_range, Series
-from pvlib.solarposition import get_solarposition
 from utils.check import type_assert
 from utils.sys.timer import Timer
 
+from greece.solartools.geometry import get_solar_position
 from greece.solartools.radiation import generate_toa_sequence, generate_clearsky_sequence
 
 __version__ = '0.1'
@@ -30,7 +30,7 @@ def erbs(ghi, location=None, sun_position=None, kt=None):
     """
     if sun_position is None:
         try:
-            sun_position = get_solarposition(ghi.index, location.latitude, location.longitude, location.altitude)
+            sun_position = get_solar_position(ghi.index, location.latitude, location.longitude, location.altitude)
         except AttributeError:
             raise ValueError("Either 'location' or 'sun_position' argument must be passed")
 
@@ -59,7 +59,7 @@ if __name__ == "__main__":
     import pvlib
     time = date_range("1/1/2011", "12/31/2011", freq="30 min")
     loc = pvlib.location.Location(42, 9)
-    sun_pos = get_solarposition(time, loc.latitude, loc.longitude)
+    sun_pos = get_solar_position(time, loc.latitude, loc.longitude, loc.altitude)
     clearsky = generate_clearsky_sequence(time, loc)
     with Timer() as t:
         diff_frac = erbs(clearsky, location=loc)
