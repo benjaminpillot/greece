@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+#!/usr/bin/env python3
 
 """ Module summary description.
 
@@ -15,12 +15,7 @@ __copyright__ = 'Copyright 2018, Benjamin Pillot'
 __email__ = 'benjaminpillot@riseup.net'
 
 
-def main():
-    description = 'Simulate a solar PV system and save AC/DC output power to file using model config file located in ' \
-                  'directory specified by the user'
+description = 'Simulate a solar PV system and save AC/DC output power to file using model config file located in ' \
+              'directory specified by the user'
 
-    run_model(PVSystemConfiguration, PVSystemModel, description, "pv_model", "pv_model.config")
-
-
-if __name__ == "__main__":
-    main()
+run_model(PVSystemConfiguration, PVSystemModel, description, "pv_model", "pv_model.config")
