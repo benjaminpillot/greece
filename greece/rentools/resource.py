@@ -7,6 +7,8 @@ More detailed description.
 
 # __all__ = []
 # __version__ = '0.1'
+import multiprocessing as mp
+
 from abc import ABCMeta, abstractmethod
 from pandas import concat, Series, DataFrame
 from numpy import sum as npsum
@@ -21,12 +23,12 @@ from gistools.raster import RasterMap, DigitalElevationModel
 from gistools.stats import ZonalStatistics
 from utils.check import type_assert, check_type, check_type_in_collection
 from utils.sys.timer import broadcast_event
+from utils.toolset import split_list_into_chunks, flatten, chunks
 
 from greece.rentools.exceptions import GeoModelError, RasterResourceMapError, PolygonMapError
 from greece.rentools.tools import get_location_from_polygon_layer
 from greece.solartools.radiation import generate_hourly_ghi_sequence, generate_daily_toa_sequence, \
-    generate_daily_kc_sequence,\
-    generate_daily_clear_sky_sequence, generate_daily_kc_sequence_over_month
+    generate_daily_kc_sequence, generate_daily_clear_sky_sequence, generate_daily_kc_sequence_over_month
 
 __author__ = 'Benjamin Pillot'
 __copyright__ = 'Copyright 2018, Benjamin Pillot'
@@ -42,6 +44,8 @@ class GeoModel(metaclass=ABCMeta):
     _crs = None
     _surface_crs = None
 
+    _cpu_count = None
+
     def __init__(self, *args, **kwargs):
         pass
 
@@ -52,6 +56,10 @@ class GeoModel(metaclass=ABCMeta):
     @property
     def surface_crs(self):
         return self._surface_crs
+
+    @property
+    def cpu_count(self):
+        return self._cpu_count
 
     @crs.setter
     def crs(self, crs):
@@ -67,6 +75,16 @@ class GeoModel(metaclass=ABCMeta):
         except ValueError:
             raise GeoModelError("Invalid CRS")
 
+    @cpu_count.setter
+    def cpu_count(self, cpu_count):
+        try:
+            pool = mp.Pool(cpu_count)
+            self._cpu_count = cpu_count
+        except (TypeError, ValueError):
+            raise GeoModelError("Invalid CPU count value")
+        else:
+            pool.close()
+
 
 class PolygonMap(GeoModel):
     """ Abstract class for all relative polygon mapping
@@ -79,15 +97,17 @@ class PolygonMap(GeoModel):
 
     polygons = None
 
-    def __init__(self, base_layer, crs, dem, land_use, surface_crs=None, compute_distance_from_centroid=False):
+    def __init__(self, base_layer, crs, dem, land_use, surface_crs=None, compute_distance_from_centroid=False,
+                 cpu_count=1):
         """ Class constructor
 
         :param base_layer:
-        :param crs:
+        :param crs: Main coordinate reference system
         :param dem: DigitalElevationModel object
         :param land_use: land use polygon layer
-        :param surface_crs:
-        :param compute_distance_from_centroid: true, false
+        :param surface_crs: CRS used for surface computation
+        :param compute_distance_from_centroid: should distances be calculated from polygon centroids ? (true, false)
+        :param cpu_count: number of cpu cores to use
         """
 
         super().__init__()
@@ -103,6 +123,7 @@ class PolygonMap(GeoModel):
             self.surface_crs = surface_crs
 
         self.compute_distance_from_centroid = compute_distance_from_centroid
+        self.cpu_count = cpu_count
         self._distance_threshold = []
         self._layer_mask = []
         self._distance_to_polygon = []
@@ -378,19 +399,15 @@ class ResourceMap(PolygonMap, metaclass=ABCMeta):
     _polygon_resource = None
     _contour_zones = None
 
-    def __init__(self, resource, base_layer, crs, dem, land_use, surface_crs, compute_distance_from_centroid):
+    def __init__(self, resource, *args, **kwargs):
         """ Class constructor
 
-        :param resource:
-        :param base_layer:
-        :param crs:
-        :param dem:
-        :param land_use:
-        :param surface_crs: crs used in computing surfaces (optional)
-        :param compute_distance_from_centroid: (optional)
+        :param resource: resource data
+        :param args: see parent class
+        :param kwargs:
         """
 
-        super().__init__(base_layer, crs, dem, land_use, surface_crs, compute_distance_from_centroid)
+        super().__init__(*args, **kwargs)
         self.resource = resource
 
     @abstractmethod
@@ -496,22 +513,6 @@ class RasterResourceMap(ResourceMap):
     PolygonMap class
     """
 
-    def __init__(self, resource_raster, base_layer, crs, dem, land_use, surface_crs=None,
-                 compute_distance_from_centroid=False):
-        """ Class constructor
-
-        :param resource_raster: RasterMap of the given resource
-        :param base_layer: base GeoLayer for study area
-        :param crs: main CRS (used in computing distances)
-        :param dem:
-        :param land_use:
-        :param surface_crs: crs used in computing areas (optional)
-        :param compute_distance_from_centroid: boolean - should distance be computed from polygon centroid ? (optional)
-
-        :Example:
-        """
-        super().__init__(resource_raster, base_layer, crs, dem, land_use, surface_crs, compute_distance_from_centroid)
-
     def _generate_resource_in_polygon(self, *args, **kwargs):
         pass
 
@@ -606,36 +607,78 @@ class SolarGHIResourceMap(RasterResourceMap):
         :param ghi_tolerance: relative tolerance for resulting hourly GHI
         :return: list of list of GHI values and time step format
         """
+        def location_chunks():
+            return chunks(location, self.cpu_count)
+
+        def ghi_chunks():
+            return chunks(resource, self.cpu_count)
+
+        def which_zone_chunks():
+            return chunks(which_zone, self.cpu_count)
+
+        # Retrieve location from polygons in layer
         location = get_location_from_polygon_layer(self.polygons, "Elevation mean", time_zone)
 
-        # Daily clear-sky irradiation
-        cls_r = [generate_daily_clear_sky_sequence(loc, accuracy, base_year) for loc in location]
+        # daily_clear_sky_radiation = [generate_daily_clear_sky_sequence(loc, accuracy, base_year) for loc in location]
 
-        # Top of atmosphere daily irradiation
-        toa_r = [generate_daily_toa_sequence(loc, accuracy, base_year) for loc in location]
+        # Parallelization
+        pool = mp.Pool(self.cpu_count)
+
+        daily_clear_sky_radiation = pool.map(mp_generate_daily_clear_sky_sequence, [[loc, accuracy, base_year] for
+                                                                                    loc in location_chunks()])
+        daily_toa_radiation = pool.map(mp_generate_daily_toa_sequence, [[loc, accuracy, base_year] for
+                                                                        loc in location_chunks()])
+
+        # daily_toa_radiation = [generate_daily_toa_sequence(loc, accuracy, base_year) for loc in location]
 
         # If data are monthly, generate daily
         if generator == "daily" or generator == "daily_and_hourly":
-            kcm = [[ghi[m - 1] / npsum(cls[cls.index.month == m])
-                    for m in range(1, 13)] for cls, ghi in zip(cls_r, resource)]
+
+            kcm = pool.map(mp_compute_monthly_kc, [[cls, ghi] for cls, ghi
+                                                   in zip(daily_clear_sky_radiation, ghi_chunks())])
+            # kcm = [[ghi[m - 1] / npsum(cls[cls.index.month == m])
+            #         for m in range(1, 13)] for cls, ghi in zip(daily_clear_sky_radiation, resource)]
 
             if self._contour_zones is not None:
                 which_zone = [[arg[0] for arg in contour_zone.intersecting_features(self.polygons.centroid())] for
                               contour_zone in self._contour_zones]
-                daily_kc = generate_kc_serie_by_zone(which_zone, kcm, base_year, time_zone, kc_tolerance)
+
+                # daily_kc = [pool.apply(generate_kc_serie_by_zone,
+                #                        args=(zone, kc, base_year, time_zone, kc_tolerance))
+                #             for zone, kc in zip(which_zone_chunks(), flatten(kcm))]
+                daily_kc = generate_kc_serie_by_zone(which_zone, flatten(kcm), base_year, time_zone, kc_tolerance)
+                daily_kc = split_list_into_chunks(daily_kc, self.cpu_count)
             else:
-                daily_kc = [generate_daily_kc_sequence(kc, base_year, time_zone, kc_tolerance) for kc in kcm]
-            daily_kt = [kc * cls / toa for kc, cls, toa in zip(daily_kc, cls_r, toa_r)]
+                daily_kc = pool.map(mp_generate_daily_kc_sequence, [[kc, base_year, time_zone, kc_tolerance] for kc
+                                                                    in kcm])
+                # daily_kc = [generate_daily_kc_sequence(kc, base_year, time_zone, kc_tolerance) for kc in kcm]
+
+            daily_kt = pool.map(mp_compute_daily_kt_sequence_from_kc, [[kc, cls, toa] for kc, cls, toa in zip(
+                daily_kc, daily_clear_sky_radiation, daily_toa_radiation)])
+            # daily_kt = [kc * cls / toa for kc, cls, toa in zip(daily_kc, daily_clear_sky_radiation, daily_toa_radiation)]
+
         else:
-            daily_kt = [Series(data=ghi, index=toa.index)/toa for ghi, toa in zip(resource, toa_r)]
-            daily_kc = [kt * toa / cls for kt, toa, cls in zip(daily_kt, toa_r, cls_r)]
+            daily_kt = pool.map(mp_compute_daily_kt_sequence_from_ghi, [[ghi, toa] for ghi, toa in
+                                                                        zip(ghi_chunks(), daily_toa_radiation)])
+            daily_kc = pool.map(mp_compute_daily_kc_sequence, [[kt, toa, cls] for kt, cls, toa in zip(
+                daily_kt, daily_toa_radiation, daily_clear_sky_radiation)])
+            # daily_kt = [Series(data=ghi, index=toa.index)/toa for ghi, toa in zip(resource, daily_toa_radiation)]
+            # daily_kc = [kt * toa / cls for kt, toa, cls in zip(daily_kt, daily_toa_radiation, daily_clear_sky_radiation)]
 
         # If data are daily, generate hourly
         if generator == "daily_and_hourly" or generator == "hourly":
-            ghi = [generate_hourly_ghi_sequence(kt, kc, toa, loc, accuracy, base_year, ghi_tolerance)
-                   for kt, kc, toa, loc in zip(daily_kt, daily_kc, toa_r, location)]
+            ghi = flatten(pool.map(mp_generate_hourly_ghi_sequence,
+                                   [[kt, kc, toa, loc, accuracy, base_year, ghi_tolerance] for kt, kc, toa, loc in
+                                    zip(daily_kt, daily_kc, daily_toa_radiation, location_chunks())]))
+            # ghi = [generate_hourly_ghi_sequence(kt, kc, toa, loc, accuracy, base_year, ghi_tolerance)
+            #        for kt, kc, toa, loc in zip(daily_kt, daily_kc, daily_toa_radiation, location)]
         else:
-            ghi = [kt * toa for kt, toa in zip(daily_kt, toa_r)]
+            ghi = flatten(pool.map(mp_compute_daily_ghi_sequence, [[kt, toa] for kt, toa in zip(daily_kt,
+                                                                                                daily_toa_radiation)]))
+            # ghi = [kt * toa for kt, toa in zip(daily_kt, daily_toa_radiation)]
+
+        # Close multiprocessing
+        pool.close()
 
         return ghi
 
@@ -718,3 +761,84 @@ def affect_zone_to_polygon(which_zone, polygons):
                     zone[idx][n] = k
 
     return zone
+
+
+# Parallelized function (MP prefix for MultiProcessing)
+def mp_compute_monthly_kc(argmap):
+    """ Compute monthly clear-sky index
+
+    """
+    clear_sky_radiation, global_horizontal_irradiance = argmap
+    return [[ghi[m - 1] / npsum(cls[cls.index.month == m]) for m in range(1, 13)]
+            for cls, ghi in zip(clear_sky_radiation, global_horizontal_irradiance)]
+
+
+def mp_compute_daily_kt_sequence_from_kc(argmap):
+    """ Compute daily clearness index sequence from daily clear-sky index
+
+    """
+    clear_sky_index, clear_sky_radiation, toa_radiation = argmap
+    return [kc * cls / toa for kc, cls, toa in zip(clear_sky_index, clear_sky_radiation, toa_radiation)]
+
+
+def mp_compute_daily_kt_sequence_from_ghi(argmap):
+    """ Compute daily clearness index sequence from GHI
+
+    """
+    global_horizontal_irradiance, toa_radiation = argmap
+    return [Series(data=ghi, index=toa.index) / toa for ghi, toa in zip(global_horizontal_irradiance, toa_radiation)]
+
+
+def mp_compute_daily_ghi_sequence(argmap):
+    """ Compute daily GHI sequence
+
+    """
+    clearness_index, toa_radiation = argmap
+    return [kt * toa for kt, toa in zip(clearness_index, toa_radiation)]
+
+
+def mp_compute_daily_kc_sequence(argmap):
+    """ Compute daily clear-sky index sequence
+
+    """
+    clearness_index, toa_radiation, clear_sky_radiation = argmap
+    return [kt * toa / cls for kt, toa, cls in zip(clearness_index, toa_radiation, clear_sky_radiation)]
+
+
+def mp_generate_daily_kc_sequence(argmap):
+    """ Generate daily clear-sky index sequence
+
+    :param argmap:
+    :return:
+    """
+    monthly_clear_sky_index, base_year, time_zone, kc_tolerance = argmap
+    return [generate_daily_kc_sequence(kc, base_year, time_zone, kc_tolerance) for kc in monthly_clear_sky_index]
+
+
+def mp_generate_daily_clear_sky_sequence(argmap):
+    """ Generate daily clear sky radiation sequence
+
+    :param argmap:
+    :return:
+    """
+    location, accuracy, base_year = argmap
+    return [generate_daily_clear_sky_sequence(loc, accuracy, base_year) for loc in location]
+
+
+def mp_generate_daily_toa_sequence(argmap):
+    """ Generate daily TOA (Top of Atmosphere) radiation sequence
+
+    :param argmap:
+    :return:
+    """
+    location, accuracy, base_year = argmap
+    return [generate_daily_toa_sequence(loc, accuracy, base_year) for loc in location]
+
+
+def mp_generate_hourly_ghi_sequence(argmap):
+    """ Generate hourly GHI sequence
+
+    """
+    clearness_index, clear_sky_index, toa_radiation, location, accuracy, base_year, ghi_tolerance = argmap
+    return [generate_hourly_ghi_sequence(kt, kc, toa, loc, accuracy, base_year, ghi_tolerance)
+            for kt, kc, toa, loc in zip(clearness_index, clear_sky_index, toa_radiation, location)]
