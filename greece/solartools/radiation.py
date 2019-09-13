@@ -7,14 +7,14 @@ More detailed description.
 from calendar import monthrange
 
 import numpy as np
+from numba import jit, float64, int64
 
 from pvlib.atmosphere import get_relative_airmass, get_absolute_airmass
 from pvlib.clearsky import lookup_linke_turbidity, ineichen
 from pvlib.irradiance import get_extra_radiation
-from pvlib.solarposition import get_solarposition
 from pandas import date_range, Timedelta, Series, DataFrame, Timestamp
 
-from greece.solartools.geometry import get_sunrise_and_sunset
+from greece.solartools.geometry import get_sunrise_and_sunset, get_solar_position
 
 __version__ = '0.1'
 __author__ = 'Benjamin Pillot'
@@ -24,6 +24,19 @@ __email__ = 'benjaminpillot@riseup.net'
 
 # Specific constants
 SOLAR_CONSTANT = 1367.  # Solar constant in W/m² (value recommended by WMO)
+
+
+def to_decimal_time(index):
+    """
+
+    :param index: DatetimeIndex
+    :return:
+    """
+    time = index.hour + (index.minute * 60 + index.second) / 3600
+    try:
+        return time.to_numpy()
+    except AttributeError:
+        return time
 
 
 def generate_synthetic_clear_sky_irradiation(time, location, sun_position=None, accuracy="30min"):
@@ -80,6 +93,7 @@ def generate_synthetic_irradiation(location, time, i_type="toa", accuracy="30min
 
 
 def generate_clearsky_sequence(time, location, sun_position=None, p_0=101325.0, model="ineichen"):
+
     """ Generate clear-sky irradiance sequence
 
     :param time:
@@ -90,7 +104,7 @@ def generate_clearsky_sequence(time, location, sun_position=None, p_0=101325.0, 
     :return:
     """
     if sun_position is None:
-        sun_position = get_solarposition(time, location.latitude, location.longitude, location.altitude)
+        sun_position = get_solar_position(time, location.latitude, location.longitude, location.altitude)
 
     # Altitude corrected (King et al. 1997; Rigollier et al. 2000)
     pressure = p_0 * np.exp(-0.0001184 * location.altitude)
@@ -120,7 +134,7 @@ def generate_toa_sequence(time, location=None, sun_position=None):
     """
     if sun_position is None:
         try:
-            sun_position = get_solarposition(time, location.latitude, location.longitude, location.altitude)
+            sun_position = get_solar_position(time, location.latitude, location.longitude, location.altitude)
         except AttributeError:
             raise ValueError("Either 'location' or 'sun_position' must be passed as input argument")
 
@@ -158,7 +172,7 @@ def generate_hourly_ghi_sequence(daily_kt, daily_kc, daily_toa, location, accura
     """
     time_centre = date_range("1/1/%d 0:30" % base_year, '12/31/%d 23:30' % base_year, freq="1H", tz=location.tz)
     time_hourly = date_range("1/1/%d 0:00" % base_year, "1/1/%d 0:00" % (base_year + 1), freq="1H", tz=location.tz)
-    sun_position = get_solarposition(time_centre, location.latitude, location.longitude, location.altitude)
+    sun_position = get_solar_position(time_centre, location.latitude, location.longitude, location.altitude)
     sunrise, sunset = get_sunrise_and_sunset(daily_kc.index, location)
     df = generate_synthetic_clearsky_clearness_index(location, time_hourly, accuracy=accuracy)
     hourly_kt = Series(generate_hourly_kt_sequence(daily_kt, daily_kc, daily_toa, sun_position["apparent_elevation"],
@@ -203,8 +217,8 @@ def generate_daily_toa_and_clear_sky_sequence(location, accuracy, base_year):
     :return:
     """
     time = date_range("1/1/%d" % base_year, "1/1/%d" % (base_year + 1), freq="1D", tz=location.tz)
-    sun_position = get_solarposition(date_range(time[0], time[-1], freq=accuracy), location.latitude,
-                                     location.longitude, location.altitude)
+    sun_position = get_solar_position(date_range(time[0], time[-1], freq=accuracy), location.latitude,
+                                      location.longitude, location.altitude)
 
     return generate_synthetic_toa_irradiation(time, location, sun_position, accuracy), \
         generate_synthetic_clear_sky_irradiation(time, location, sun_position, accuracy)
@@ -221,8 +235,8 @@ def generate_synthetic_clearsky_clearness_index(location, time, accuracy="30min"
     """
 
     if sun_position is None:
-        sun_position = get_solarposition(date_range(time[0], time[-1], freq=accuracy), location.latitude,
-                                         location.longitude, location.altitude)
+        sun_position = get_solar_position(date_range(time[0], time[-1], freq=accuracy), location.latitude,
+                                          location.longitude, location.altitude)
     clearsky = generate_synthetic_clear_sky_irradiation(time, location, sun_position=sun_position, accuracy=accuracy)
     toa = generate_synthetic_toa_irradiation(time, location, sun_position=sun_position, accuracy=accuracy)
 
@@ -241,7 +255,7 @@ def generate_clearsky_clearness_index_sequence(location, time, sun_position=None
     :return:
     """
     if sun_position is None:
-        sun_position = get_solarposition(time, location.latitude, location.longitude, location.altitude)
+        sun_position = get_solar_position(time, location.latitude, location.longitude, location.altitude)
     clearsky = generate_clearsky_sequence(time, location, sun_position)
     toa = generate_toa_sequence(time, sun_position=sun_position)
     kt = clearsky / toa
@@ -301,7 +315,8 @@ def generate_daily_kc_sequence_over_month(kcm, kc0, month, base_year, tz="UTC", 
             nb_iterations += 1
 
 
-def generate_hourly_kt_sequence(daily_kt, daily_kc, daily_toa, sun_elevation, sunrise, sunset, kcs_df, tolerance=0.05):
+def generate_hourly_kt_sequence(daily_kt, daily_kc, daily_toa, sun_elevation, sunrise, sunset, kcs_df,
+                                tolerance=0.05, max_iter=10):
     """ Generate sequence of hourly kt
 
     :param daily_kt: Timeseries of daily kt values
@@ -312,19 +327,24 @@ def generate_hourly_kt_sequence(daily_kt, daily_kc, daily_toa, sun_elevation, su
     :param sunset: sun set of the corresponding days (DatetimeIndex)
     :param kcs_df: clearsky kt dataframe (kt, toa, cls)
     :param tolerance: relative tolerance for corresponding hourly GHI
+    :param max_iter: maximum number of iterations when generating hourly kt over the day
     :return:
     """
     hourly_kt = []
     for day, sun_r, sun_s in zip(daily_kt.index, sunrise, sunset):
         daily_time = (sun_elevation.index.year == day.year) & (sun_elevation.index.month == day.month) &\
                      (sun_elevation.index.day == day.day)
-        daily_elevation = sun_elevation[daily_time]
-        kt_cls = kcs_df["kt"].loc[daily_time]
-        toa_h = kcs_df["toa"].loc[daily_time]
+        daily_elevation = sun_elevation[daily_time].values
+        time = to_decimal_time(sun_elevation[daily_time].index)
+        sun_rise = to_decimal_time(sun_r)
+        sun_set = to_decimal_time(sun_s)
+        kt_cls = kcs_df["kt"].loc[daily_time].values
+        toa_h = kcs_df["toa"].loc[daily_time].values
 
         while "it is not within range":
 
-            kt = _generate_hourly_kt_over_day(daily_elevation, daily_kt[day], daily_kc[day], kt_cls, sun_r, sun_s)
+            kt = _generate_hourly_kt_over_day(daily_elevation, time, daily_kt[day], daily_kc[day], kt_cls, sun_rise,
+                                              sun_set, max_iter)
 
             if abs(np.sum(kt * toa_h) - daily_kt[day] * daily_toa[day]) / (daily_kt[day] * daily_toa[day]) < tolerance:
                 break
@@ -508,7 +528,8 @@ def _generate_daily_kc(kcm, kc0, nd, rd=None):
     return kc
 
 
-def _generate_hourly_kt_over_day(elevation, kt_day, kc_day, kt_cls, sunrise, sunset, max_iter=10):
+@jit((float64[:], float64[:], float64, float64, float64[:], float64, float64, int64), cache=True, nopython=True)
+def _generate_hourly_kt_over_day(elevation, htime, kt_day, kc_day, kt_cls, sunrise, sunset, max_iter):
 
     phi = 0.148 + 2.356 * kt_day - 5.195 * kt_day ** 2 + 3.758 * kt_day ** 3
     sigma = 0.32 * np.exp(-50 * (kt_day - 0.4) ** 2) + 0.002
@@ -517,9 +538,9 @@ def _generate_hourly_kt_over_day(elevation, kt_day, kc_day, kt_cls, sunrise, sun
     kt = np.zeros(len(elevation))
     y = np.zeros(len(elevation))
 
-    for time, h_sun, kcs in zip(elevation.index, elevation.values, kt_cls):
+    for time, h_sun, kcs in zip(htime, elevation, kt_cls):
 
-        if time + Timedelta("30min") > sunrise and time - Timedelta("30min") < sunset:
+        if time + 0.5 > sunrise and time - 0.5 < sunset:
 
             # Average clearness index (MeteoNorm version)
             ktm = kc_day * kcs
@@ -529,7 +550,7 @@ def _generate_hourly_kt_over_day(elevation, kt_day, kc_day, kt_cls, sunrise, sun
             _iter = 0
             while (kti < 0) or (kti > kcs):
                 r = np.random.normal(loc=0, scale=sigma_prime)
-                yi = 2 * phi * y[time.hour - 1] + r  # MeteoNorm version
+                yi = 2 * phi * y[int(time) - 1] + r  # MeteoNorm version
                 kti = ktm + yi
 
                 # Iteration control
@@ -543,27 +564,34 @@ def _generate_hourly_kt_over_day(elevation, kt_day, kc_day, kt_cls, sunrise, sun
                 if kti > 0.8 and h_sun < 10:
                     kti = 0.8
 
-            kt[time.hour] = kti
-            y[time.hour] = yi
+            kt[int(time)] = kti
+            y[int(time)] = yi
 
     return kt
 
 
 if __name__ == "__main__":
     from pvlib.location import Location
+    from utils.sys.timer import Timer
     kcm_main = [0.61, 0.6, 0.605, 0.595, 0.608, 0.602, 0.61, 0.6, 0.593, 0.598, 0.601, 0.602]
     kc0_main = kcm_main
     # test = _generate_daily_kc(0.5, 0.5, 31)
     # print(np.mean(test))
     loc = Location(latitude=5, longitude=-70, altitude=100)
-    kc_main = generate_daily_kc_sequence_over_month(kcm_main, kc0_main, 2, 2018, tz=loc.tz, tolerance=0.01)
+    kc_main = generate_daily_kc_sequence(kcm_main, 2018, tz=loc.tz, tolerance=0.01)
     print([np.mean(kc) for kc in kc_main])
     print(np.mean(kcm_main))
-    # cls_r = generate_daily_clear_sky_sequence(loc, "30min", 2018)
-    # toa_r = generate_daily_toa_sequence(loc, "30min", 2018)
-    # kt_main = kc_main * cls_r / toa_r
+    with Timer() as t:
+        cls_r = generate_daily_clear_sky_sequence(loc, "30min", 2018)
+    print("spent time: %s" % t)
+    toa_r = generate_daily_toa_sequence(loc, "30min", 2018)
+    kt_main = kc_main * cls_r / toa_r
     #
-    # hourly_ghi = generate_hourly_ghi_sequence(kt_main, kc_main, toa_r, loc, "30min", 2018, 0.04)
+    with Timer() as t:
+        for p in range(30):
+            kc_main_test = generate_daily_kc_sequence_over_month(kcm_main, kc0_main, 2, 2018, tz=loc.tz, tolerance=0.01)
+            # hourly_ghi = generate_hourly_ghi_sequence(kt_main, kc_main, toa_r, loc, "30min", 2018, 0.05)
+    print("spent time: %s" % t)
     #
     # original_ghi = kcm_main[1] * np.sum(cls_r[cls_r.index.month == 2])
     # intermediate_ghi = np.sum(cls_r[cls_r.index.month == 2] * kc_main[kc_main.index.month == 2])
