@@ -63,13 +63,18 @@ class SpatialExtractionModel(GeoModel, metaclass=ABCMeta):
     """
 
     # Main attributes
+    polygon_map_args = None
     polygon_map = None
+
+    def __init__(self, configuration):
+        super().__init__(configuration)
+        self.polygon_map_args = (self.configuration.base_layer, self.configuration.crs, self.configuration.dem,
+                                 self.configuration.land_use_layer, self.configuration.surface_crs,
+                                 self.configuration.compute_distance_from_centroid, self.configuration.cpu_count)
 
     @abstractmethod
     def _init_polygon_map_instance(self):
-        self.polygon_map = PolygonMap(self.configuration.base_layer, self.configuration.crs, self.configuration.dem,
-                                      self.configuration.land_use_layer, self.configuration.surface_crs,
-                                      self.configuration.compute_distance_from_centroid)
+        self.polygon_map = PolygonMap(*self.polygon_map_args)
 
     @broadcast_event("Loading constraint layers")
     def init_polygon_map_instance(self):
@@ -152,12 +157,12 @@ class SpatialGenerationModel(SpatialExtractionModel):
         super().save_results()
 
 
-class SpatialRasterResourceModel(SpatialExtractionModel):
-    """ Class for modeling energy resource
+class SpatialResourceModel(SpatialExtractionModel):
+    """ Base class for modeling energy resource
 
     """
 
-    _resource_map_class = RasterResourceMap
+    _resource_map_class = None
 
     @broadcast_event("Initiating resource model", message_level=1)
     def __init__(self, configuration):
@@ -165,16 +170,32 @@ class SpatialRasterResourceModel(SpatialExtractionModel):
 
     def _init_polygon_map_instance(self):
         # TODO: let the resource being a LAYER too
-        if self.configuration.resource_raster is None:
-            super()._init_polygon_map_instance()
+        self.polygon_map = self._resource_map_class(self.configuration.resource, *self.polygon_map_args)
+
+    def save_results(self):
+
+        super().save_results()
+
+        # Save resource
+        # TODO: resource either as raster or as layer must implement a "to_csv" method
+        if self.configuration.destination_path["resource_table"] is not None:
+            self.resource.to_csv(self.configuration.destination_path["resource_table"], float_format="%.2f",
+                                 index=True)
+
+    @property
+    def resource(self):
+        if self.polygon_map.polygon_resource is not None:
+            return self.polygon_map.polygon_resource
         else:
-            self.polygon_map = self._resource_map_class(self.configuration.resource_raster,
-                                                        self.configuration.base_layer,
-                                                        self.configuration.crs,
-                                                        self.configuration.dem,
-                                                        self.configuration.land_use_layer,
-                                                        self.configuration.surface_crs,
-                                                        self.configuration.compute_distance_from_centroid)
+            raise SpatialRasterResourceModelError("No resource has been extracted yet")
+
+
+class SpatialRasterResourceModel(SpatialResourceModel):
+    """ Class for modeling energy resource
+
+    """
+
+    _resource_map_class = RasterResourceMap
 
     def extract_polygons(self, *args):
 
@@ -186,22 +207,6 @@ class SpatialRasterResourceModel(SpatialExtractionModel):
                                  self.configuration.main_percentile_range,
                                  self.configuration.use_resource_generator,
                                  self.configuration.resource_generator, *args)
-
-    def save_results(self):
-
-        super().save_results()
-
-        # Save resource
-        if self.configuration.destination_path["resource_table"] is not None:
-            self.resource.to_csv(self.configuration.destination_path["resource_table"], float_format="%.2f",
-                                 index=True)
-
-    @property
-    def resource(self):
-        if self.polygon_map.polygon_resource is not None:
-            return self.polygon_map.polygon_resource
-        else:
-            raise SpatialRasterResourceModelError("No resource has been extracted yet")
 
 
 class SolarGHIModel(SpatialRasterResourceModel):
