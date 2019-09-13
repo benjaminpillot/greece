@@ -17,12 +17,7 @@ __copyright__ = 'Copyright 2018, Benjamin Pillot'
 __email__ = 'benjaminpillot@riseup.net'
 
 
-def main():
-    description = 'Compute GHI polygons and save it to geo/table file(s)' \
-                  'using given config files located in directory specified by the user'
+description = 'Compute GHI polygons and save it to geo/table file(s)' \
+              'using given config files located in directory specified by the user'
 
-    run_model(SolarGHIConfiguration, SolarGHIModel, description, "solar_ghi", "main.config", "solar.config")
-
-
-if __name__ == "__main__":
-    main()
+run_model(SolarGHIConfiguration, SolarGHIModel, description, "solar_ghi", "main.config", "solar.config")
