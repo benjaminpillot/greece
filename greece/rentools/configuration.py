@@ -8,8 +8,10 @@ More detailed description.
 # __all__ = []
 # __version__ = '0.1'
 import copy
+import multiprocessing as mp
 import os
 import warnings
+from abc import abstractmethod
 
 import dateutil
 import pandas as pd
@@ -26,7 +28,7 @@ from greece.rentools import VALID_RASTER_FORMATS, CEC_MODULE_NAMES
 from greece.rentools.configuration_parser import MainConfigurationParser, RoadNetworkConfigurationParser, \
     ConstraintConfigurationParser, RasterResourceConfigurationParser, NetworkConfigurationParser, \
     GridConfigurationParser, TransportationConfigurationParser, RoadTransportationConfigurationParser, \
-    BiomassConfigurationParser, SolarGHIConfigurationParser, ResourceConfigurationParser, PVSystemConfigurationParser, \
+    BiomassConfigurationParser, SolarGHIConfigurationParser, PVSystemConfigurationParser, \
     MixedGenerationConfigurationParser
 from greece.rentools.exceptions import ConfigurationError, NetworkConfigurationError, MainConfigurationError, \
     ConstraintConfigurationError, ResourceConfigurationError, PVSystemConfigurationWarning
@@ -79,6 +81,7 @@ class MainConfiguration(Configuration):
         # Set attributes
         self.crs = self._config_parser.CRS
         self.surface_crs = self._config_parser.SURFACE_CRS
+        self.cpu_count = min(self._config_parser.CPU_COUNT, mp.cpu_count())
         self.set_dem()
         self.set_land_use_layer()
 
@@ -243,14 +246,17 @@ class ConstraintConfiguration(MainConfiguration):
         return arg_list
 
 
+# Abstract class for resource configuration
 class ResourceConfiguration(ConstraintConfiguration):
 
+    resource_configuration_parser_class = None
     contour_interval = None
+    resource = None
 
     def __init__(self, main_config_file, resource_config_file):
 
         super().__init__(main_config_file, resource_config_file)
-        self._config_parser = ResourceConfigurationParser(resource_config_file).parse()
+        self._config_parser = self.resource_configuration_parser_class(resource_config_file).parse()
 
         # Set attributes
         self.destination_path.update(resource_table=self._config_parser.SAVE_RESOURCE_TABLE_TO)
@@ -261,6 +267,7 @@ class ResourceConfiguration(ConstraintConfiguration):
         self.resource_generator = self._config_parser.RESOURCE_GENERATOR
 
         self.set_contour_interval()
+        self.set_resource()
 
     def set_contour_interval(self):
         if self.contour_interval_type == 'relative':
@@ -268,28 +275,29 @@ class ResourceConfiguration(ConstraintConfiguration):
         else:
             self.contour_interval = self._config_parser.CONTOUR_INTERVAL_VALUE
 
+    @abstractmethod
+    def set_resource(self):
+        pass
+
 
 class RasterResourceConfiguration(ResourceConfiguration):
-    """ Build and store parameters from configuration parser
+    """ Implement raster resource config
 
     """
-
-    resource_raster = None
+    resource_configuration_parser_class = RasterResourceConfigurationParser
 
     def __init__(self, main_config_file, resource_config_file):
 
         super().__init__(main_config_file, resource_config_file)
-        self._config_parser = RasterResourceConfigurationParser(resource_config_file).parse()
 
         # Set specific attributes
         self.all_touched = self._config_parser.ALL_TOUCHED
         self.is_surface_weighted = self._config_parser.SURFACE_WEIGHTED
-        self.set_resource_raster()
 
-    def set_resource_raster(self):
+    def set_resource(self):
         if self._config_parser.PATH_TO_RESOURCE is not None:
             if os.path.isdir(self._config_parser.PATH_TO_RESOURCE) and self._config_parser.RASTER_FORMAT is not None:
-                self.resource_raster = []
+                self.resource = []
                 set_of_files = find_file(VALID_RASTER_FORMATS[self._config_parser.RASTER_FORMAT],
                                          self._config_parser.PATH_TO_RESOURCE, sort=True)
                 if len(set_of_files) == 0:
@@ -302,17 +310,17 @@ class RasterResourceConfiguration(ResourceConfiguration):
                         raise ResourceConfigurationError("Raster file '%s' cannot be read" % file)
                     if self._config_parser.RESAMPLING_FACTOR is not None:
                         raster_map = raster_map.gdal_resample(self._config_parser.RESAMPLING_FACTOR)
-                    self.resource_raster.append(raster_map)
+                    self.resource.append(raster_map)
 
             elif isfile(self._config_parser.PATH_TO_RESOURCE):
                 try:
-                    self.resource_raster = RasterMap(self._config_parser.PATH_TO_RESOURCE,
-                                                     no_data_value=self._config_parser.NO_DATA_VALUE)
+                    self.resource = RasterMap(self._config_parser.PATH_TO_RESOURCE,
+                                              no_data_value=self._config_parser.NO_DATA_VALUE)
                 except RasterMapError:
                     raise ResourceConfigurationError("Raster file '%s' cannot be read" %
                                                      self._config_parser.PATH_TO_RESOURCE)
                 if self._config_parser.RESAMPLING_FACTOR is not None:
-                    self.resource_raster = self.resource_raster.gdal_resample(self._config_parser.RESAMPLING_FACTOR)
+                    self.resource = self.resource.gdal_resample(self._config_parser.RESAMPLING_FACTOR)
 
 
 class SolarGHIConfiguration(RasterResourceConfiguration):
@@ -770,16 +778,9 @@ class PVSystemConfiguration(Configuration):
 
 
 if __name__ == "__main__":
-    import numpy as np
-    test = SolarGHIConfiguration("/home/benjamin/ownCloud/Post-doc Guyane/GREECE model/Config files/Main "
-                                 "configuration/main.config", "/home/benjamin/ownCloud/Post-doc Guyane/GREECE model/"
-                                                              "Config files/Solar GHI/solar.config")
-    length = 0
-    for layer in test.list_of_mask_layers[::2]:
-        print("%s, length=%d" % (layer.name, len(layer)))
-        length += len(layer)
-    print("\nTotal length = %d\n" % length)
-    print("Length of base layer: %d" % len(test.base_layer))
-    print("Area of base layer: %.3f" % (np.sum(test.base_layer.area)))
-    # test = MixedGenerationConfiguration("/home/benjamin/ownCloud/Post-doc Guyane/GREECE model/Config files/Mixed "
-    #                                     "generation/mixed_generation.config")
+    test = MainConfiguration("/home/benjamin/ownCloud/Post-doc Guyane/GREECE model/Config files/Main "
+                             "configuration/main.config")
+    print(test.cpu_count)
+    # test = RasterResourceConfiguration("/home/benjamin/ownCloud/Post-doc Guyane/GREECE model/Config files/Main "
+    #                                    "configuration/main.config", "/home/benjamin/ownCloud/Post-doc Guyane/GREECE "
+    #                                                                 "model/Config files/Solar GHI/solar.config")
