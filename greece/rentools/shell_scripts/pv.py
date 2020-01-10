@@ -18,4 +18,4 @@ __email__ = 'benjaminpillot@riseup.net'
 description = 'Simulate a solar PV system and save AC/DC output power to file using model config file located in ' \
               'directory specified by the user'
 
-run_model(PVSystemConfiguration, PVSystemModel, description, "pv_model", "pv_model.config")
+run_model(PVSystemConfiguration, PVSystemModel, description, "pv_model", "main.config", "pv_model.config")

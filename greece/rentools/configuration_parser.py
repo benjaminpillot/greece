@@ -400,12 +400,14 @@ class ConstraintConfigurationParser(ConfigurationParser):
     METIS_OBJTYPE = "cut"
     METIS_IPTYPE = "edge"
     METIS_RTYPE = "greedy"
+    RETRIEVE_PAIRWISE_DISTANCE = False
     COMPUTE_SHAPE_FACTOR = False
     USE_CONVEX_HULL_SHAPE = True
     COMPUTE_DEM_STATISTICS = False
     EXTRACT_LAND_USE = False
     SAVE_POLYGON_LAYER_TO = None
     SAVE_POLYGON_TABLE_TO = None
+    SAVE_PAIRWISE_DISTANCE_MATRIX_TO = None
 
     def __init__(self, config_file):
 
@@ -426,10 +428,11 @@ class ConstraintConfigurationParser(ConfigurationParser):
             SPLIT_SHAPE=self._set_split_shape, DISAGGREGATION_FACTOR=self._set_positive_integer,
             METRIC_PRECISION=self._set_positive_integer, METIS_NCUTS=self._set_positive_integer,
             METIS_OBJTYPE=self._set_objtype, METIS_IPTYPE=self._set_iptype, METIS_RTYPE=self._set_rtype,
-            COMPUTE_SHAPE_FACTOR=self._set_boolean, USE_CONVEX_HULL_SHAPE=self._set_boolean,
-            COMPUTE_DEM_STATISTICS=self._set_boolean, EXTRACT_LAND_USE=self._set_boolean,
-            SAVE_POLYGON_LAYER_TO=self._set_layer_destination_path,
-            SAVE_POLYGON_TABLE_TO=self._set_table_destination_path)
+            RETRIEVE_PAIRWISE_DISTANCE=self._set_boolean, COMPUTE_SHAPE_FACTOR=self._set_boolean,
+            USE_CONVEX_HULL_SHAPE=self._set_boolean, COMPUTE_DEM_STATISTICS=self._set_boolean,
+            EXTRACT_LAND_USE=self._set_boolean, SAVE_POLYGON_LAYER_TO=self._set_layer_destination_path,
+            SAVE_POLYGON_TABLE_TO=self._set_table_destination_path,
+            SAVE_PAIRWISE_DISTANCE_MATRIX_TO=self._set_table_destination_path)
 
     def is_valid_config_file(self):
         # TODO: check validity of configuration file
@@ -602,6 +605,7 @@ class PVSystemConfigurationParser(ConfigurationParser):
 
     POLYGON_LAYER = None
     GHI = None
+    GHI_TYPE = "irradiation"
     USE_DIFFUSE_FRACTION = True
     DIFFUSE_FRACTION_MODEL = "erbs"
     DNI = None
@@ -646,7 +650,7 @@ class PVSystemConfigurationParser(ConfigurationParser):
         super().__init__(config_file)
 
         self._read_main_config_attributes.update(
-            POLYGON_LAYER=self._set_path_to_layer_file, GHI=self._set_path_to_file,
+            POLYGON_LAYER=self._set_path_to_layer_file, GHI=self._set_path_to_file, GHI_TYPE=self._set_ghi_type,
             USE_DIFFUSE_FRACTION=self._set_boolean, DIFFUSE_FRACTION_MODEL=self._set_diffuse_fraction_model,
             DNI=self._set_path_to_file, DHI=self._set_path_to_file, AIR_TEMPERATURE=self._set_air_temperature,
             WIND_SPEED=self._set_wind_speed, ALBEDO=self._set_albedo, SURFACE_TILT=self._set_surface_tilt,
@@ -681,6 +685,9 @@ class PVSystemConfigurationParser(ConfigurationParser):
     def _set_gcr(self, attr, gcr):
         self._set_positive_float(attr, gcr)
         self._set_float_in_range(attr, gcr, 0, 1)
+
+    def _set_ghi_type(self, attr, ghi_type):
+        self._set_among_valid_values(attr, ghi_type.lower(), {"irradiation", "irradiance"})
 
     def _set_pvwatts_parameter(self, attr, value):
         self._set_float_in_range(attr, value, 0, 100)

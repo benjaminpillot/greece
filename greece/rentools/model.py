@@ -7,25 +7,29 @@ More detailed description.
 
 # __all__ = []
 # __version__ = '0.1'
+import multiprocessing as mp
 import os
 from abc import ABCMeta, abstractmethod
 
 from numpy import sum as npsum
 from numpy import zeros as npzeros
-from pandas import DataFrame, date_range
+from pandas import DataFrame, date_range, Series
 from pvlib.modelchain import ModelChain
 from pvlib.pvsystem import PVSystem
 from gistools.exceptions import GeoLayerEmptyError
 from gistools.network import RoadNetwork, find_all_disconnected_edges_and_fix
 from utils.check import protected_property
 from utils.sys.timer import broadcast_event
+from utils.toolset import chunks, flatten
 
 from greece.rentools import VALID_LAYER_DRIVERS, SANDIA_MODULE_DATABASE, CEC_MODULE_DATABASE, CEC_INVERTER_DATABASE
 from greece.rentools.configuration import RoadTransportationConfiguration, BiomassConfiguration, \
     PVSystemConfiguration, MixedGenerationConfiguration
 from greece.rentools.exceptions import SpatialExtractionModelError, SpatialRasterResourceModelError
 from greece.rentools.resource import RasterResourceMap, PolygonMap, SolarGHIResourceMap
-from greece.solartools.conversion import irradiance_to_irradiation
+from greece.solartools.conversion import irradiance_to_irradiation, irradiation_to_irradiance
+from greece.solartools.diffuse_fraction import erbs
+from greece.tmstools import interp_time_series
 
 __author__ = 'Benjamin Pillot'
 __copyright__ = 'Copyright 2018, Benjamin Pillot'
@@ -66,6 +70,9 @@ class SpatialExtractionModel(GeoModel, metaclass=ABCMeta):
     polygon_map_args = None
     polygon_map = None
 
+    # Pairwise distance between polygons
+    pairwise_distance_matrix = None
+
     def __init__(self, configuration):
         super().__init__(configuration)
         self.polygon_map_args = (self.configuration.base_layer, self.configuration.crs, self.configuration.dem,
@@ -105,6 +112,18 @@ class SpatialExtractionModel(GeoModel, metaclass=ABCMeta):
         except GeoLayerEmptyError:
             raise SpatialExtractionModelError("No available polygons with given configuration")
 
+        # Compute pairwise distance if necessary
+        if self.configuration.retrieve_pairwise_distance:
+            self.retrieve_pairwise_distance()
+
+    @broadcast_event("Computing pairwise distance", message_level=1)
+    def retrieve_pairwise_distance(self):
+        if self.configuration.compute_distance_from_centroid:
+            centroids = self.polygons.centroid()
+            self.pairwise_distance_matrix = centroids.pairwise_distance(centroids)
+        else:
+            self.pairwise_distance_matrix = self.polygons.pairwise_distance(self.polygons)
+
     def run(self):
         """ Run model
 
@@ -120,15 +139,21 @@ class SpatialExtractionModel(GeoModel, metaclass=ABCMeta):
         """
         super().save_results()
 
-        if self.configuration.destination_path["layer"] is not None:
+        if self.configuration.destination_path["layer"]:
             self.polygons.to_file(self.configuration.destination_path["layer"], VALID_LAYER_DRIVERS[os.path.splitext(
                 self.configuration.destination_path["layer"])[1]])
 
-        if self.configuration.destination_path["table"] is not None:
+        if self.configuration.destination_path["table"]:
             self.polygons.index += 1  # Start index at 1 in csv file
             self.polygons.to_csv(self.configuration.destination_path["table"],
                                  attributes=[attr for attr in self.polygons.attributes() if attr != "geometry"],
                                  float_format="%.2f")
+
+        if self.configuration.destination_path["pairwise_distance_matrix"] and self.pairwise_distance_matrix is not None:
+            df = DataFrame(data=self.pairwise_distance_matrix,
+                           index=["%d" % (n + 1) for n in range(self.pairwise_distance_matrix.shape[0])],
+                           columns=["%d" % (n + 1) for n in range(self.pairwise_distance_matrix.shape[1])])
+            df.to_csv(self.configuration.destination_path["pairwise_distance_matrix"], float_format="%.2f")
 
     @property
     def polygons(self):
@@ -178,7 +203,7 @@ class SpatialResourceModel(SpatialExtractionModel):
 
         # Save resource
         # TODO: resource either as raster or as layer must implement a "to_csv" method
-        if self.configuration.destination_path["resource_table"] is not None:
+        if self.configuration.destination_path["resource_table"]:
             self.resource.to_csv(self.configuration.destination_path["resource_table"], float_format="%.2f",
                                  index=True)
 
@@ -578,6 +603,11 @@ class PVSystemModel(Model):
 
     """
     # Inputs
+    ghi = None
+    dni = None
+    dhi = None
+    air_temperature = None
+    wind_speed = None
     model_chain = None
     weather = None
 
@@ -585,11 +615,16 @@ class PVSystemModel(Model):
     dc_power = None
     ac_power = None
 
-    @broadcast_event("Initializing PV model", message_level=1)
+    # TODO: dynamic albedo ?
+
+    @broadcast_event("Initializing PV model", message_level=1, no_time=True)
     def __init__(self, pv_configuration: PVSystemConfiguration):
         super().__init__(pv_configuration)
 
         # Init model chain and weather
+        self._set_ghi()
+        self._set_climatic_parameters()
+        self._set_dni_and_dhi()
         self._set_model_chain()
         self._set_weather()
 
@@ -606,6 +641,43 @@ class PVSystemModel(Model):
 
         return module
 
+    @broadcast_event("Compute climatic parameters", message_level=2)
+    def _set_climatic_parameters(self):
+        for attr in ["air_temperature", "wind_speed"]:
+            try:
+                out = [interp_time_series(self.configuration.__getattribute__(attr)[col], ghi.index)
+                       for col, ghi in zip(self.configuration.__getattribute__(attr).columns, self.ghi)]
+            except AttributeError:
+                out = [Series(data=[self.configuration.__getattribute__(attr)] * len(ghi), index=ghi.index) for ghi in
+                       self.ghi]
+
+            self.__setattr__(attr, out)
+
+    @broadcast_event("Compute DNI and DHI", message_level=2)
+    def _set_dni_and_dhi(self):
+        """ Set DNI and DHI
+
+        :return:
+        """
+        if self.configuration.use_diffuse_fraction:
+            if self.configuration.diffuse_fraction_model == "erbs":
+                df = [erbs(ghi, location) for ghi, location in zip(self.ghi, self.configuration.location)]
+                self.dni = [ds["dni"] for ds in df]
+                self.dhi = [ds["dhi"] for ds in df]
+            else:
+                pass
+        else:
+            pass
+
+    @broadcast_event("Compute GHI", message_level=2)
+    def _set_ghi(self):
+        if self.configuration.ghi_type == "irradiation":
+            self.ghi = [irradiation_to_irradiance(self.configuration.ghi[polygon], location)
+                        for polygon, location in zip(self.configuration.ghi.columns, self.configuration.location)]
+        else:
+            self.ghi = [self.configuration.ghi[polygon] for polygon in self.configuration.ghi.columns]
+
+    @broadcast_event("Set model chain", message_level=2)
     def _set_model_chain(self):
         """ Set pvlib model chain
 
@@ -631,11 +703,11 @@ class PVSystemModel(Model):
                                        losses_model=self.configuration.losses_model) for pv_system, location in zip(
             pv_systems, self.configuration.location)]
 
+    @broadcast_event("Initialize weather parameters", message_level=2)
     def _set_weather(self):
         self.weather = [DataFrame({'ghi': ghi, 'dni': dni, 'dhi': dhi, 'temp_air': temp, 'wind_speed': wind_spd}) for
-                        ghi, dni, dhi, temp, wind_spd in zip(self.configuration.ghi, self.configuration.dni,
-                                                             self.configuration.dhi, self.configuration.air_temperature,
-                                                             self.configuration.wind_speed)]
+                        ghi, dni, dhi, temp, wind_spd in zip(self.ghi, self.dni, self.dhi, self.air_temperature,
+                                                             self.wind_speed)]
 
     def get_array_nominal_power(self):
         """ Get nominal power of PV array
@@ -737,6 +809,25 @@ class PVSystemModel(Model):
 
         :return:
         """
+        def location_chunks():
+            return chunks(self.configuration.location, self.configuration.cpu_count)
+
+        def mc_chunks():
+            return chunks(self.model_chain, self.configuration.cpu_count)
+
+        def weather_chunks():
+            return chunks(self.weather, self.configuration.cpu_count)
+
+        # Parallelization
+        # pool = mp.Pool(self.configuration.cpu_count)
+        #
+        # out = pool.map(run_pv_model_mp, [[location, model_chain, weather, self.configuration.power_to_energy_method]
+        #                for location, model_chain, weather in zip(location_chunks(), mc_chunks(), weather_chunks())])
+        # dc_output = flatten([dc[0] for dc in out])
+        # ac_output = flatten([ac[0] for ac in out])
+        #
+        # pool.close()
+        #
         # Initialize dc, ac energy and simulation time step
         dc_output = []
         ac_output = []
@@ -750,6 +841,7 @@ class PVSystemModel(Model):
             ac_output.append(irradiance_to_irradiation(mc.ac, time, location,
                                                        self.configuration.power_to_energy_method))
 
+        # Store
         self.dc_power = DataFrame({"polygon %d" % (n + 1): dc for n, dc in enumerate(dc_output)})
         self.ac_power = DataFrame({"polygon %d" % (n + 1): ac for n, ac in enumerate(ac_output)})
 
@@ -768,6 +860,23 @@ class PVSystemModel(Model):
 
         if self.configuration.destination_path["features"] is not None:
             self.get_system_features().to_csv(self.configuration.destination_path["features"], index=False)
+
+
+def run_pv_model_mp(argmap):
+    """ Parallelized computation for pv model
+
+    :return:
+    """
+    location, model_chain, weather, power_to_energy_method = argmap
+    dc = []
+    ac = []
+    time = date_range(weather[0].index[0].floor("H"), weather[0].index[-1].ceil("H"), freq="1H")
+    for loc, mc, weather in zip(location, model_chain, weather):
+        mc.run_model(weather.index, weather)
+        dc.append(irradiance_to_irradiation(mc.dc["p_mp"], time, loc, power_to_energy_method))
+        ac.append(irradiance_to_irradiation(mc.ac, time, loc, power_to_energy_method))
+
+    return dc, ac
 
 
 # class MixedGenerationModel(metaclass=ABCMeta):

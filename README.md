@@ -28,7 +28,7 @@ Here the list of what is done and what is to do:
 - [ ] Terrain-based effects on solar radiation (horizon obstruction + altitude)
 - [ ] PostgreSQL interface for input data
 - [ ] Power Flow model for further analysis of network voltage stability
-- [ ] Link to CPLEX optimization within Python (through [``cplex``](https://pypi.org/project/cplex/))
+- [ ] Link to CPLEX optimization within Python (through [``cplex``](https://pypi.org/project/cplex/) or [``pyomo``](http://www.pyomo.org/))
 
 
 

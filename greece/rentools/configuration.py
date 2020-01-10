@@ -33,9 +33,6 @@ from greece.rentools.configuration_parser import MainConfigurationParser, RoadNe
 from greece.rentools.exceptions import ConfigurationError, NetworkConfigurationError, MainConfigurationError, \
     ConstraintConfigurationError, ResourceConfigurationError, PVSystemConfigurationWarning
 from greece.rentools.tools import get_location_from_polygon_layer
-from greece.tmstools.timeseries import interp_time_series
-from greece.solartools.conversion import irradiation_to_irradiance
-from greece.solartools.diffuse_fraction import erbs
 
 __author__ = 'Benjamin Pillot'
 __copyright__ = 'Copyright 2018, Benjamin Pillot'
@@ -133,12 +130,14 @@ class ConstraintConfiguration(MainConfiguration):
                                       objtype=self._config_parser.METIS_OBJTYPE, contig=True,
                                       ncuts=self._config_parser.METIS_NCUTS, iptype=self._config_parser.METIS_IPTYPE,
                                       rtype=self._config_parser.METIS_RTYPE)
+        self.retrieve_pairwise_distance = self._config_parser.RETRIEVE_PAIRWISE_DISTANCE
         self.compute_shape_factor = self._config_parser.COMPUTE_SHAPE_FACTOR
         self.use_convex_hull = self._config_parser.USE_CONVEX_HULL_SHAPE
         self.compute_dem_statistics = self._config_parser.COMPUTE_DEM_STATISTICS
         self.extract_land_use = self._config_parser.EXTRACT_LAND_USE
         self.destination_path = dict(layer=self._config_parser.SAVE_POLYGON_LAYER_TO,
-                                     table=self._config_parser.SAVE_POLYGON_TABLE_TO)
+                                     table=self._config_parser.SAVE_POLYGON_TABLE_TO,
+                                     pairwise_distance_matrix=self._config_parser.SAVE_PAIRWISE_DISTANCE_MATRIX_TO)
         self.set_base_layer()
         self.set_list_of_distance_threshold_layers()
         self.set_list_of_mask_layers()
@@ -621,30 +620,31 @@ class MixedGenerationConfiguration(MainConfiguration):
         self.is_normalized = self._config_parser.IS_NORMALIZED
 
 
-class PVSystemConfiguration(Configuration):
+class PVSystemConfiguration(MainConfiguration):
     """ Implement config for PV system model
 
     """
     polygon_layer = None
-    ghi = None
-    dni = None
-    dhi = None
     air_temperature = None
     wind_speed = None
+    albedo = None
     surface_orientation = None
     aoi_model = None
     spectral_model = None
     losses_parameters = None
 
-    def __init__(self, pv_model_config_file):
-
+    def __init__(self, main_config_file, pv_model_config_file):
+        super().__init__(pv_model_config_file)
         self._config_parser = PVSystemConfigurationParser(pv_model_config_file).parse()
 
         # Set attributes
         self.set_polygon_layer("polygon_layer", self._config_parser.POLYGON_LAYER)
         self.location = get_location_from_polygon_layer(self.polygon_layer, "Elevation mean")
-        self.set_ghi()
-        self.set_dni_and_dhi()
+        self.ghi = pd.read_csv(self._config_parser.GHI, parse_dates=True, date_parser=dateutil.parser.parse,
+                               index_col=0)
+        self.ghi_type = self._config_parser.GHI_TYPE
+        self.use_diffuse_fraction = self._config_parser.USE_DIFFUSE_FRACTION
+        self.diffuse_fraction_model = self._config_parser.DIFFUSE_FRACTION_MODEL
         self.power_to_energy_method = self._config_parser.POWER_TO_ENERGY_METHOD
         self.albedo = self._config_parser.ALBEDO
         self.module_name = self._config_parser.MODULE_NAME
@@ -692,51 +692,19 @@ class PVSystemConfiguration(Configuration):
         else:
             self.spectral_model = self._config_parser.SPECTRAL_MODEL
 
-    def set_dni_and_dhi(self):
-        """ Set DNI and DHI
-
-        :return:
-        """
-        if self._config_parser.USE_DIFFUSE_FRACTION:
-            if self._config_parser.DIFFUSE_FRACTION_MODEL == "erbs":
-                df = [erbs(ghi, location) for ghi, location in zip(self.ghi, self.location)]
-                self.dni = [ds["dni"] for ds in df]
-                self.dhi = [ds["dhi"] for ds in df]
-            else:
-                pass
-        else:
-            pass
-        # self.dni = pd.read_csv(self._config_parser.DNI, parse_dates=True, date_parser=pd.DatetimeIndex, index_col=0)
-        # self.dhi = pd.read_csv(self._config_parser.DHI, parse_dates=True, date_parser=pd.DatetimeIndex, index_col=0)
-        # if self.dni.shape != self.ghi.shape or self.dni.shape != self.ghi.shape:
-        #     raise PVSystemConfigurationError("Shape of DNI ({}) or DHI ({}) must be the same as GHI ({})".format(
-        #         self.dni.shape, self.dhi.shape, self.ghi.shape))
-
     def set_climatic_parameters(self):
-        """ Set air temperature, wind speed and albedo
+        """ Set air temperature and wind speed
 
         :return:
         """
         for attr, param in zip(["air_temperature", "wind_speed"], [self._config_parser.AIR_TEMPERATURE,
                                self._config_parser.WIND_SPEED]):
             try:
-                df = pd.read_csv(param, parse_dates=True, date_parser=dateutil.parser.parse, index_col=0)
-                out = [interp_time_series(df[col], ghi.index) for col, ghi in zip(df, self.ghi)]
-                # if out.shape != self.ghi.shape:
-                #     raise PVSystemConfigurationError("Shape of '{}' ({}) is not the same as shape of "
-                #                                      "GHI ({})".format(param, out.shape, self.ghi.shape))
+                out = pd.read_csv(param, parse_dates=True, date_parser=dateutil.parser.parse, index_col=0)
             except ValueError:
-                out = [pd.Series(data=[param] * len(ghi), index=ghi.index) for ghi in self.ghi]
+                out = param
 
             self.__setattr__(attr, out)
-
-    def set_ghi(self):
-        """ Set GHI (convert irradiance from irradiation)
-
-        :return:
-        """
-        ghi = pd.read_csv(self._config_parser.GHI, parse_dates=True, date_parser=dateutil.parser.parse, index_col=0)
-        self.ghi = [irradiation_to_irradiance(ghi[col], loc) for col, loc in zip(ghi, self.location)]
 
     def set_losses_parameters(self):
         """ Set PVWATTS losses parameters
@@ -778,9 +746,9 @@ class PVSystemConfiguration(Configuration):
 
 
 if __name__ == "__main__":
-    test = MainConfiguration("/home/benjamin/ownCloud/Post-doc Guyane/GREECE model/Config files/Main "
-                             "configuration/main.config")
-    print(test.cpu_count)
+    test = PVSystemConfiguration("/home/benjamin/ownCloud/Post-doc Guyane/GREECE model/Config files/Main "
+                                 "configuration/main.config", "/home/benjamin/ownCloud/Post-doc Guyane/GREECE "
+                                                              "model/Config files/Energy system models/pv_model.config")
     # test = RasterResourceConfiguration("/home/benjamin/ownCloud/Post-doc Guyane/GREECE model/Config files/Main "
     #                                    "configuration/main.config", "/home/benjamin/ownCloud/Post-doc Guyane/GREECE "
     #                                                                 "model/Config files/Solar GHI/solar.config")

@@ -44,24 +44,24 @@ def irradiance_to_irradiation(irradiance, time, location, method='integration'):
         irradiance_julian_time = Series(irradiance.index.to_julian_date(), irradiance.index)
 
         # Compute values and times corresponding to time for which we must integrate
-        values = [irradiance[idx_1:idx].values for idx_1, idx in zip(time[0:-1:], time[1::])]
-        times = [irradiance_julian_time[idx_1:idx].values for idx_1, idx in zip(time[0:-1:], time[1::])]
+        irradiance_values = [irradiance[idx_1:idx].values for idx_1, idx in zip(time[0:-1:], time[1::])]
+        irradiance_time = [irradiance_julian_time[idx_1:idx].values for idx_1, idx in zip(time[0:-1:], time[1::])]
 
         # Final data
-        data = [24 * trapz(val, ttime) for val, ttime in zip(values, times)]
+        irradiation = [24 * trapz(value, ttime) for value, ttime in zip(irradiance_values, irradiance_time)]
 
     elif method == 'mean':
 
         delta = Timedelta("1H")
         time_step = time[1::] - time[:-1]
-        data = [val * 2 * (t_1 - t_1_2) / delta if t_1 - t_1_2 <= step/2 else
-                val * 2 * (t_1_2 - t_0) / delta for val, t_0, t_1, t_1_2, step in
-                zip(irradiance.values, time[:-1], time[1::], irradiance.index, time_step)]
+        irradiation = [val * 2 * (t_1 - t_1_2) / delta if t_1 - t_1_2 <= step/2 else val * 2 * (t_1_2 - t_0) / delta
+                       for val, t_0, t_1, t_1_2, step in zip(irradiance.values, time[:-1], time[1::],
+                                                             irradiance.index, time_step)]
 
     else:
-        data = []
+        irradiation = []
 
-    return Series(data=data, index=time[:-1])
+    return Series(data=irradiation, index=time[:-1])
 
 
 def irradiation_to_irradiance(irradiation, location=None):
@@ -71,39 +71,42 @@ def irradiation_to_irradiance(irradiation, location=None):
     :param location:
     :return:
     """
-    time = irradiation.index
-    time_step = TimedeltaIndex([time[1] - time[0]]).append(time[1::] - time[:-1])
-    new_time = Series(time + time_step/2)
-    new_values = irradiation.values * 3600 / time_step.seconds.values
+    time_irradiation = irradiation.index
+    time_step = TimedeltaIndex([time_irradiation[1] - time_irradiation[0]]).append(time_irradiation[1::] -
+                                                                                   time_irradiation[:-1])
+    time = Series(time_irradiation + time_step/2)
+    irradiance = irradiation.values * 3600 / time_step.seconds.values
 
     # Compute sunrise and sunset if not provided
-    sunrise, sunset = get_sunrise_and_sunset(time, location)
+    sunrise, sunset = get_sunrise_and_sunset(time_irradiation, location)
 
     # Sunrise/sunset index stands for the moment when time stamp overpasses sunrise/sunset time
     # A little bit more tricky for sunrise since irradiation time index
     # is defined with respect to: 06:00 stands for the irradiation from
     # 06:00 to 07:00 (as the SAM PV model)
-    sunrise_idx = zeros(len(new_time))
+    sunrise_idx = zeros(len(time))
     sunset_idx = sunrise_idx.copy()
-    sunrise_idx[sunrise < time] = 1
-    sunset_idx[sunset > time] = 1
+    sunrise_idx[sunrise < time_irradiation] = 1
+    sunset_idx[sunset > time_irradiation] = 1
     sunrise_idx = argwhere(diff(sunrise_idx) == 1).squeeze()
     sunset_idx = argwhere(diff(sunset_idx) == -1).squeeze()
 
     # Compute time and corresponding values
-    new_time.values[sunrise_idx] = time[sunrise_idx + 1] - (time[sunrise_idx + 1] - sunrise[sunrise_idx + 1])/2
-    new_time.values[sunset_idx] = time[sunset_idx] + (sunset[sunset_idx] - time[sunset_idx])/2
-    new_values[sunrise_idx] = new_values[sunrise_idx] * 3600/(time[sunrise_idx + 1] - sunrise[sunrise_idx]).seconds
-    new_values[sunset_idx] = new_values[sunset_idx] * 3600/(sunset[sunset_idx] - time[sunset_idx]).seconds
+    time.values[sunrise_idx] = time_irradiation[sunrise_idx + 1] - (time_irradiation[sunrise_idx + 1] - sunrise[
+        sunrise_idx + 1])/2
+    time.values[sunset_idx] = time_irradiation[sunset_idx] + (sunset[sunset_idx] - time_irradiation[sunset_idx])/2
+    irradiance[sunrise_idx] = irradiance[sunrise_idx] * 3600/(time_irradiation[sunrise_idx + 1] - sunrise[
+        sunrise_idx]).seconds
+    irradiance[sunset_idx] = irradiance[sunset_idx] * 3600/(sunset[sunset_idx] - time_irradiation[sunset_idx]).seconds
 
-    return Series(new_values, DatetimeIndex(new_time).round("s"))
+    return Series(irradiance, DatetimeIndex(time).round("s"))
 
 
 if __name__ == "__main__":
     from pandas import date_range
     from pvlib.location import Location
     from greece.solartools.radiation import generate_synthetic_irradiation, generate_toa_sequence
-    from gistools.utils.sys.timer import Timer
+    from utils.sys.timer import Timer
 
     loc = Location(5, -50, tz='America/Cayenne')
     time_h = date_range("1/1/2011 0:00", "1/1/2012 0:00", freq="1H", tz=loc.tz)
