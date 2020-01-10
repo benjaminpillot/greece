@@ -17,7 +17,7 @@ The easiest way to install greece is through Pypi. In your preferred virtual env
 
 
 ## TODO
-Here the list of what is done and what is to do:
+Here's the list of what is done and what remains to be done:
 - [x] Constraint model
 - [x] Solar GHI model
 - [x] PV conversion model
